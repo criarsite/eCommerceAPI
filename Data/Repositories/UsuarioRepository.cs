@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Data;
 using Dapper;
-using System.Linq;
-using System.Threading.Tasks;
 using eCommerceAPI.Models;
 using Microsoft.Data.SqlClient;
 
@@ -12,90 +8,254 @@ namespace eCommerceAPI.Data.Repositories
     public class UsuarioRepository : IUsuarioRepository
     {
 
-        private IDbConnection _connection; 
-        public UsuarioRepository() // conexao com o banco de dados
+        private IDbConnection _contexto; 
+        public UsuarioRepository()
         {
-         _connection = new SqlConnection("Server=localhost;Database=ApiDapper;Trusted_Connection=True;TrustServerCertificate=True;");
+         _contexto = new SqlConnection(
+          @"Server=localhost;
+         Database=ApiDapper;
+         Trusted_Connection=True;
+         TrustServerCertificate=True;"
+         );
         }
        
-
+  
         public List<Usuario> Get()
         {
+            List<Usuario> usuarios = new List<Usuario>();
+            string sql = 
+            @"SELECT U.*, C.*, EE.*, D.* 
+            FROM Usuarios as U 
+            LEFT JOIN Contatos C ON C.UsuarioId = U.Id 
+            LEFT JOIN EnderecosEntrega EE ON EE.UsuarioId = U.Id 
+            LEFT JOIN UsuariosDepartamentos UD ON UD.UsuarioId = U.Id 
+            LEFT JOIN Departamentos D ON UD.DepartamentoId = D.Id";
 
-            /*Para retornar todos os usuarios apenas retorne o 
-            e muito simples apenas retorne o banco de dados _db*/
-            //return _db;
-            return _connection.Query<Usuario>("SELECT * FROM Usuarios").ToList();
+            _contexto.Query<Usuario, Contato, EnderecoEntrega, Departamento, Usuario>( sql,  
+                (usuario, contato, enderecoEntrega, departamento ) => {
+
+                    //Validar usuario  para evitar duplicidade
+                    if( usuarios.SingleOrDefault(a => a.Id == usuario.Id) == null)
+                    {
+                        usuario.Departamentos = new List<Departamento>();
+                        usuario.EnderecosEntrega = new List<EnderecoEntrega>();
+                        usuario.Contato = contato;
+                        
+                        usuarios.Add(usuario); 
+                    } else
+                    {
+                        usuario = usuarios.SingleOrDefault(a => a.Id == usuario.Id);
+                    }
+
+                    //Verificar Endereço de Entrega.
+                    if( usuario.EnderecosEntrega.SingleOrDefault(a=>a.Id == enderecoEntrega.Id) == null){
+                        usuario.EnderecosEntrega.Add(enderecoEntrega);
+                    }
+
+                    //Verificar Departamento.
+                    if (usuario.Departamentos.SingleOrDefault(a => a.Id == departamento.Id) == null)
+                    {
+                        usuario.Departamentos.Add(departamento);
+                    }
+
+                    return usuario;
+                });
+
+             return usuarios;
         }
 
         public Usuario Get(int id)
         {
-            /*  para pegar apenas um usuario eu tenho que retonar o banco de dados 
-           pesquisando este usuario onde faz a pesquisa baseada no ID _db.FirstOrDefault( a => a.Id == id); 
-           */
-            //return _db.FirstOrDefault(a => a.Id == id);
-            return _connection.QuerySingleOrDefault<Usuario>("SELECT * FROM Usuarios WHERE Id =@Id", new {Id = id});
+            List<Usuario> usuarios = new List<Usuario>();
+            string sql =
+             @"SELECT U.*, C.*, EE.*, D.* 
+             FROM Usuarios as U 
+             LEFT JOIN Contatos C ON C.UsuarioId = U.Id 
+             LEFT JOIN EnderecosEntrega EE ON EE.UsuarioId = U.Id 
+             LEFT JOIN UsuariosDepartamentos UD ON UD.UsuarioId = U.Id 
+             LEFT JOIN Departamentos D ON UD.DepartamentoId = D.Id 
+             WHERE U.Id = @Id";
+
+            _contexto.Query<Usuario, Contato, EnderecoEntrega, Departamento, Usuario>(sql,
+                (usuario, contato, enderecoEntrega, departamento) => {
+
+                    if (usuarios.SingleOrDefault(a => a.Id == usuario.Id) == null)
+                    {
+                        usuario.Departamentos = new List<Departamento>();
+                        usuario.EnderecosEntrega = new List<EnderecoEntrega>();
+                        usuario.Contato = contato;
+                        usuarios.Add(usuario);
+                    }
+                    else
+                    {
+                        usuario = usuarios.SingleOrDefault(a => a.Id == usuario.Id);
+                    }
+
+                    if (usuario.EnderecosEntrega.SingleOrDefault(a => a.Id == enderecoEntrega.Id) == null)
+                    {
+                        usuario.EnderecosEntrega.Add(enderecoEntrega); 
+                    }
+
+                    if (usuario.Departamentos.SingleOrDefault(a =>  a.Id == departamento.Id)  == null)
+                    {
+                        usuario.Departamentos.Add(departamento); 
+                    }
+
+                    return usuario;
+
+                }, new { Id = id });
+
+            return usuarios.SingleOrDefault();
         }
 
         public void Insert(Usuario usuario)
         {
-         /* // logica para encontra  o ultimo usuario e se nao encontrar retornar nulo
-          var ultimoUsuario = _db.LastOrDefault();
-          if (ultimoUsuario == null)
-          {
-            usuario.Id =1;
-          } else{
-            usuario.Id = ultimoUsuario.Id;
-            usuario.Id++;
-          }
+            _contexto.Open();
+            var transaction = _contexto.BeginTransaction();
+            try
+            {
+                string sql = 
+                @"INSERT INTO Usuarios(Nome, Email, Sexo, RG, CPF, NomeMae, SituacaoCadastro, DataCadastro) 
+                VALUES (@Nome, @Email, @Sexo, @RG, @CPF, @NomeMae, @SituacaoCadastro, @DataCadastro); 
+                SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                usuario.Id = _contexto.Query<int>(sql, usuario, transaction).Single();
 
-         // para inserir usamos o .Add (usuario)
-         _db.Add(usuario);
-        */
-       string sql ="INSERT INTO [dbo].[Usuarios] (Nome, Email, Sexo, RG, CPF, NomeMae, SituacaoCadastro, DataCadastro) VALUES (@Nome, @Email, @Sexo, @RG, @CPF, @NomeMae, @SituacaoCadastro, @DataCadastro); SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                if (usuario.Contato != null)
+                {
+                    usuario.Contato.UsuarioId = usuario.Id;
+                    string sqlContato = @"INSERT INTO Contatos(UsuarioId, Telefone, Celular) 
+                    VALUES (@UsuarioId, @Telefone, @Celular); 
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                    usuario.Contato.Id = _contexto.Query<int>( sqlContato, usuario.Contato, transaction).Single(); 
+                }
 
-        _connection.Query<int>(sql, usuario ).Single();
+                if(usuario.EnderecosEntrega != null && usuario.EnderecosEntrega.Count > 0)
+                {
+                    foreach(var enderecoEntrega in usuario.EnderecosEntrega)
+                    {
+                        enderecoEntrega.UsuarioId = usuario.Id;
+                        string sqlEndereco = 
+                        @"INSERT INTO EnderecosEntrega(UsuarioId, NomeEndereco, CEP, Estado, Cidade, Bairro, Endereco, Numero, Complemento) 
+                        VALUES (@UsuarioId, @NomeEndereco, @CEP, @Estado, @Cidade, @Bairro, @Endereco, @Numero, @Complemento); 
+                        SELECT CAST(SCOPE_IDENTITY() AS INT);";
 
+                        enderecoEntrega.Id = _contexto.Query<int>(sqlEndereco, enderecoEntrega, transaction).Single();
+                    }
+                }
+
+                if (usuario.Departamentos != null && usuario.Departamentos.Count > 0)
+                {
+                    foreach (var departamento in usuario.Departamentos)
+                    {
+                        string sqlUsuariosDepartamentos = 
+                        @"INSERT INTO UsuariosDepartamentos (UsuarioId, DepartamentoId)
+                         VALUES (@UsuarioId, @DepartamentoId)"; 
+
+                        _contexto.Execute(sqlUsuariosDepartamentos, new { UsuarioId = usuario.Id, DepartamentoId = departamento.Id }, transaction);
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch (Exception)
+            {
+                try { 
+                    transaction.Rollback();
+                }
+                catch (Exception){}
+            }
+            finally
+            {
+                _contexto.Close();
+            }
         }
 
         public void Update(Usuario usuario)
         {
-           /* para atualizar precisamos achar o registro _db.FirstOrDefault(a => a.Id == id); re remover e depois adiconar outro
-          _db.Remove( _db.FirstOrDefault(a => a.Id == usuario.Id));
-          _db.Add(usuario);
-          */
-// Codigo SQL de atualizacao
-          string sql = "UPDATE [dbo].[Usuarios] SET Nome = @nome, Email = @email, Sexo = @sexo, RG = @rg, CPF = @cpf, NomeMae = @nomeMae, SituacaoCadastro = @situacaoCadastro, DataCadastro = @dataCadastro WHERE Id = @id";
-             // nao vamos usar o Query pois usamos ele quando queremos algum tipo de retorno 
-             // quando quremos executar apenas um comando que nao vai ter retorno usamos o meto .Execute()
+            _contexto.Open(); 
+            var transaction = _contexto.BeginTransaction();
 
-             _connection.Execute(sql, usuario);
-             //passa o conexao com o bando de dados com o metodo execute passando como paramento o comando sql e o objeto de retorno.
+            try
+            {
+                string sql = 
+                @"UPDATE Usuarios SET Nome = @Nome, 
+                Email = @Email, 
+                Sexo = @Sexo, 
+                RG = @RG, 
+                CPF = @CPF, 
+                NomeMae = @NomeMae, 
+                SituacaoCadastro = @SituacaoCadastro, 
+                DataCadastro = @DataCadastro 
+                WHERE Id = @Id";
+
+                _contexto.Execute(sql, usuario, transaction);
+
+                if(usuario.Contato != null) { 
+                    string sqlContato = 
+                    @"UPDATE Contatos SET 
+                    UsuarioId = @UsuarioId, 
+                    Telefone = @Telefone, 
+                    Celular = @Celular 
+                    WHERE Id = @Id";
+                    _contexto.Execute(sqlContato, usuario.Contato, transaction);
+                }
+
+                string sqlDeletarEnderecosEntrega = 
+                @"DELETE FROM EnderecosEntrega 
+                WHERE UsuarioId = @Id";
+
+                _contexto.Execute(sqlDeletarEnderecosEntrega, usuario, transaction);
+
+                if (usuario.EnderecosEntrega != null && usuario.EnderecosEntrega.Count > 0)
+                {
+                    foreach (var enderecoEntrega in usuario.EnderecosEntrega)
+                    {
+                        enderecoEntrega.UsuarioId = usuario.Id;
+                        string sqlEndereco = 
+                        @"INSERT INTO EnderecosEntrega(UsuarioId, NomeEndereco, CEP, Estado, Cidade, Bairro, Endereco, Numero, Complemento) 
+                        VALUES (@UsuarioId, @NomeEndereco, @CEP, @Estado, @Cidade, @Bairro, @Endereco, @Numero, @Complemento); 
+                        SELECT CAST(SCOPE_IDENTITY() 
+                        AS INT);";
+
+                        enderecoEntrega.Id = _contexto.Query<int>(sqlEndereco, enderecoEntrega, transaction).Single();
+                    }
+                }
+
+                string sqlDeletarUsuariosDapartamentos = "DELETE FROM UsuariosDepartamentos WHERE UsuarioId = @Id";
+                _contexto.Execute(sqlDeletarUsuariosDapartamentos, usuario, transaction);
+
+                if (usuario.Departamentos != null && usuario.Departamentos.Count > 0)
+                {
+                    foreach (var departamento in usuario.Departamentos)
+                    {
+                        string sqlUsuariosDepartamentos = 
+                        @"INSERT INTO UsuariosDepartamentos (UsuarioId, DepartamentoId)
+                         VALUES (@UsuarioId, @DepartamentoId)";
+
+                        _contexto.Execute(sqlUsuariosDepartamentos, new { UsuarioId = usuario.Id, DepartamentoId = departamento.Id }, transaction);
+                    }
+                }
+
+                transaction.Commit();
+            } catch(Exception) {
+                try { 
+                    transaction.Rollback();
+                }catch(Exception)
+                {
+                }
+            } finally {
+                _contexto.Close();
+            }            
         }
 
-         public void Delete(int id)
+        public void Delete(int id)
         {
-                //_db.Remove( _db.FirstOrDefault(a => a.Id == id));
-           _connection.Execute("DELETE FROM [dbo].[Usuarios] WHERE Id = @id", new {Id = id});
-
+            _contexto.Execute("DELETE FROM Usuarios WHERE Id = @Id", new { Id = id });
         }
 
-
-
-
-
-             /* este medodo estava no topo e veio para o final 
-           private static List<Usuario> _db = new List<Usuario>()
-       {
-            // Simulando os Usuarios que teria no banco de dados
-        new Usuario(){ Id=1, Nome="Thais Melo", Email="thazitta@gmail.com"},
-        new Usuario() {Id=2 , Nome="Luana Gomes", Email="lolo@gmail.com"},
-        new Usuario() {Id=3 , Nome="Alice Gomes", Email="lili@gmail.com"},
-        new Usuario() {Id=4, Nome="Washington Gomes", Email="oktuga@gmail.com"}
-       };
-               */
-
-
-        
     }
+
+
 }
+
+ 

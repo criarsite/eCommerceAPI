@@ -67,7 +67,7 @@ namespace eCommerceAPI.Controllers
          return Ok(usuario);
         }
 
-        [HttpPut]
+        [HttpPatch]
        public IActionResult Update([FromBody] Usuario usuario)
        {
           _repository.Update(usuario);
